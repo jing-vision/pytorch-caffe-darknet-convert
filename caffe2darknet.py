@@ -1,5 +1,8 @@
 #!/home/ubuntu/anaconda2/bin/python -f 
 
+# Python 2/3 compatibility
+from __future__ import print_function
+
 from collections import OrderedDict
 from cfg import *
 from prototxt import *
@@ -9,7 +12,7 @@ def caffe2darknet(protofile, caffemodel):
     model = parse_caffemodel(caffemodel)
     layers = model.layer
     if len(layers) == 0:
-        print 'Using V1LayerParameter'
+        print('Using V1LayerParameter')
         layers = model.layers
     
     lmap = {}
@@ -23,7 +26,7 @@ def caffe2darknet(protofile, caffemodel):
     blocks = []
     block = OrderedDict()
     block['type'] = 'net'
-    if props.has_key('input_shape'):
+    if 'input_shape' in props:
         block['batch'] = props['input_shape']['dim'][0]
         block['channels'] = props['input_shape']['dim'][1]
         block['height'] = props['input_shape']['dim'][2]
@@ -33,7 +36,7 @@ def caffe2darknet(protofile, caffemodel):
         block['channels'] = props['input_dim'][1]
         block['height'] = props['input_dim'][2]
         block['width'] = props['input_dim'][3]
-    if props.has_key('mean_file'):
+    if 'mean_file' in props:
         block['mean_file'] = props['mean_file']
     blocks.append(block)
 
@@ -44,7 +47,7 @@ def caffe2darknet(protofile, caffemodel):
     layer_id[props['input']] = 0
     while i < layer_num:
         layer = layers[i]
-        print i,layer['name'], layer['type']
+        print(i,layer['name'], layer['type'])
         if layer['type'] == 'Convolution':
             if layer_id[layer['bottom']] != len(blocks)-1:
                 block = OrderedDict()
@@ -58,13 +61,13 @@ def caffe2darknet(protofile, caffemodel):
             block['type'] = 'convolutional'
             block['filters'] = conv_layer['convolution_param']['num_output']
             block['size'] = conv_layer['convolution_param']['kernel_size']
-            block['stride'] = conv_layer['convolution_param']['stride']
+            block['stride'] = conv_layer['convolution_param'].get('stride', 1)
             block['pad'] = '1'
             last_layer = conv_layer 
             m_conv_layer = lmap[conv_layer['name']] 
             if i+2 < layer_num and layers[i+1]['type'] == 'BatchNorm' and layers[i+2]['type'] == 'Scale':
-                print i+1,layers[i+1]['name'], layers[i+1]['type']
-                print i+2,layers[i+2]['name'], layers[i+2]['type']
+                print(i+1,layers[i+1]['name'], layers[i+1]['type'])
+                print(i+2,layers[i+2]['name'], layers[i+2]['type'])
                 block['batch_normalize'] = '1'
                 bn_layer = layers[i+1]
                 scale_layer = layers[i+2]
@@ -81,7 +84,7 @@ def caffe2darknet(protofile, caffemodel):
             wdata += list(m_conv_layer.blobs[0].data)       ## conv_weights
             
             if i+1 < layer_num and layers[i+1]['type'] == 'ReLU':
-                print i+1,layers[i+1]['name'], layers[i+1]['type']
+                print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 act_layer = layers[i+1]
                 block['activation'] = 'relu'
                 top = act_layer['top']
@@ -102,8 +105,8 @@ def caffe2darknet(protofile, caffemodel):
             elif layer['pooling_param']['pool'] == 'MAX':
                 block['type'] = 'maxpool'
                 block['size'] = layer['pooling_param']['kernel_size']
-                block['stride'] = layer['pooling_param']['stride']
-                if layer['pooling_param'].has_key('pad'):
+                block['stride'] = layer['pooling_param'].get('stride', 1)
+                if 'pad' in layer['pooling_param']:
                     pad = int(layer['pooling_param']['pad'])
                     if pad > 0:
                         block['pad'] = '1'
@@ -171,7 +174,7 @@ def caffe2darknet(protofile, caffemodel):
 
             i = i + 1
 
-    print 'done' 
+    print('done' )
     return blocks, np.array(wdata)
 
 def prototxt2cfg(protofile):
@@ -181,7 +184,7 @@ def prototxt2cfg(protofile):
     blocks = []
     block = OrderedDict()
     block['type'] = 'net' 
-    if props.has_key('input_shape'): 
+    if 'input_shape' in props: 
         block['batch'] = props['input_shape']['dim'][0]
         block['channels'] = props['input_shape']['dim'][1]
         block['height'] = props['input_shape']['dim'][2]
@@ -191,7 +194,7 @@ def prototxt2cfg(protofile):
         block['channels'] = props['input_dim'][1]
         block['height'] = props['input_dim'][2]
         block['width'] = props['input_dim'][3]
-    if props.has_key('mean_file'):
+    if 'mean_file' in props:
         block['mean_file'] = props['mean_file']
     blocks.append(block)
 
@@ -202,7 +205,7 @@ def prototxt2cfg(protofile):
     layer_id[props['input']] = 0
     while i < layer_num:
         layer = layers[i]
-        print i,layer['name'], layer['type']
+        print(i,layer['name'], layer['type'])
         if layer['type'] == 'Convolution':
             if layer_id[layer['bottom']] != len(blocks)-1:
                 block = OrderedDict()
@@ -214,14 +217,12 @@ def prototxt2cfg(protofile):
             block['type'] = 'convolutional'
             block['filters'] = conv_layer['convolution_param']['num_output']
             block['size'] = conv_layer['convolution_param']['kernel_size']
-            block['stride'] = '1'
-            if conv_layer['convolution_param'].has_key('stride'):
-                block['stride'] = conv_layer['convolution_param']['stride']
+            block['stride'] = conv_layer['convolution_param'].get('stride', 1)
             block['pad'] = '1'
             last_layer = conv_layer 
             if i+2 < layer_num and layers[i+1]['type'] == 'BatchNorm' and layers[i+2]['type'] == 'Scale':
-                print i+1,layers[i+1]['name'], layers[i+1]['type']
-                print i+2,layers[i+2]['name'], layers[i+2]['type']
+                print(i+1,layers[i+1]['name'], layers[i+1]['type'])
+                print(i+2,layers[i+2]['name'], layers[i+2]['type'])
                 block['batch_normalize'] = '1'
                 bn_layer = layers[i+1]
                 scale_layer = layers[i+2]
@@ -229,7 +230,7 @@ def prototxt2cfg(protofile):
                 i = i + 2
             
             if i+1 < layer_num and layers[i+1]['type'] == 'ReLU':
-                print i+1,layers[i+1]['name'], layers[i+1]['type']
+                print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 act_layer = layers[i+1]
                 block['activation'] = 'relu'
                 top = act_layer['top']
@@ -250,8 +251,8 @@ def prototxt2cfg(protofile):
             elif layer['pooling_param']['pool'] == 'MAX':
                 block['type'] = 'maxpool'
                 block['size'] = layer['pooling_param']['kernel_size']
-                block['stride'] = layer['pooling_param']['stride']
-                if layer['pooling_param'].has_key('pad'):
+                block['stride'] = layer['pooling_param'].get('stride', 1)
+                if 'pad' in layer['pooling_param']:
                     pad = int(layer['pooling_param']['pad'])
                     if pad > 0:
                         block['pad'] = '1'
@@ -315,12 +316,12 @@ def prototxt2cfg(protofile):
             blocks.append(block)
             i = i + 1
 
-    print 'done' 
+    print('done')
     return blocks
 
 
 def save_weights(data, weightfile):
-    print 'Save to ', weightfile
+    print('Save to ', weightfile)
     wsize = data.size
     weights = np.zeros((wsize+4,), dtype=np.int32)
     ## write info 

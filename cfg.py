@@ -1,4 +1,11 @@
-import torch
+# Python 2/3 compatibility
+from __future__ import print_function
+
+try:
+    import torch
+except Exception:
+    pass
+
 from collections import OrderedDict
 
 def parse_cfg(cfgfile):
