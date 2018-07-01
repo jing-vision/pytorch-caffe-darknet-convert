@@ -9,62 +9,109 @@ from prototxt import *
 import numpy as np
 
 def caffe2darknet(protofile, caffemodel):
-    model = parse_caffemodel(caffemodel)
-    layers = model.layer
-    if len(layers) == 0:
-        print('Using V1LayerParameter')
-        layers = model.layers
-    
-    lmap = {}
-    for l in layers:
-       lmap[l.name] = l 
-
+    import topological_sort
+    # build DAG and sort
     net_info = parse_prototxt(protofile)
     props = net_info['props']
+    org_layers = net_info['layers']
 
-    wdata = []
-    blocks = []
+    org_layer_id_by_name = OrderedDict()
+    graph = {}
+    for i in range(len(org_layers)):
+        layer = org_layers[i]
+        layer_name = layer['name']
+        layer_type = layer['type']
+        bottom_name = layer['bottom']
+        org_layer_id_by_name[layer_name] = i
+        if not isinstance(bottom_name, list):
+            bottom_name = [bottom_name]
+        for b_name in bottom_name:
+            if layer_type in ('Convolution', 'Pooling'):
+                b_name = b_name.replace('conv', 'relu')
+            bottom = graph.get(b_name, [])
+            bottom.append(layer_name)
+            graph[b_name] = bottom
+    if 'image' in graph:
+        del graph['image']
+    sorted_layer_names = topological_sort.topological_sort(graph)
+    for s in sorted_layer_names:
+        print(s)
+
+    # load weights and build name -> weights map
+    layer_weights_by_name = {}
+
+    if True:
+        model = parse_caffemodel(caffemodel)
+        model_layers = model.layer
+        if len(model_layers) == 0:
+            print('Using V1LayerParameter')
+            model_layers = model.layers
+        
+        for layer in model_layers:
+            layer_weights_by_name[layer.name] = layer
+
+    # 
+    weights_data = [] # *.weights
+    cfg_blocks = []  # *.cfg
+    
     block = OrderedDict()
     block['type'] = 'net'
     if 'input_shape' in props:
+        block['width'] = props['input_shape']['dim'][3]
+        block['height'] = props['input_shape']['dim'][2]
         block['batch'] = props['input_shape']['dim'][0]
         block['channels'] = props['input_shape']['dim'][1]
-        block['height'] = props['input_shape']['dim'][2]
-        block['width'] = props['input_shape']['dim'][3]
     else:
+        block['width'] = props['input_dim'][3]
+        block['height'] = props['input_dim'][2]
         block['batch'] = props['input_dim'][0]
         block['channels'] = props['input_dim'][1]
-        block['height'] = props['input_dim'][2]
-        block['width'] = props['input_dim'][3]
+    if int(block['width']) < 10:
+        block['width'] = 200
+    if int(block['height']) < 10:
+        block['height'] = 200
     if 'mean_file' in props:
         block['mean_file'] = props['mean_file']
-    blocks.append(block)
+    cfg_blocks.append(block)
 
-    layers = net_info['layers']
-    layer_num = len(layers)
+    layer_num = len(sorted_layer_names)
+    layers = []
+    for layer_name in sorted_layer_names:
+        org_id = org_layer_id_by_name[layer_name]
+        layers.append(org_layers[org_id])
+    del org_layer_id_by_name
     i = 0 # layer id
-    layer_id = dict()
-    layer_id[props['input']] = 0
+    layer_id_by_name = dict()
+    layer_id_by_name[props['input']] = 0
     while i < layer_num:
         layer = layers[i]
-        print(i,layer['name'], layer['type'])
-        if layer['type'] == 'Convolution':
-            if layer_id[layer['bottom']] != len(blocks)-1:
-                block = OrderedDict()
-                block['type'] = 'route'
-                block['layers'] = str(layer_id[layer['bottom']] - len(blocks))
-                blocks.append(block)
+        layer_name = layer['name']
+        layer_type = layer['type']
+        print(i, layer_name, layer_type)
+        block = OrderedDict()
+        block['name'] =  layer_name
+
+        if layer_type == 'Convolution':
+            if layer_id_by_name[layer['bottom']] != len(cfg_blocks)-1:
+                a_block = OrderedDict()
+                a_block['name'] =  layer_name
+                # a_block['bottom'] = layer['bottom']
+                # a_block['bottom layer_id'] = layer_id_by_name[layer['bottom']]
+                # a_block['gold_bottom'] = len(cfg_a_blocks) - 1
+                a_block['type'] = 'route'
+                a_block['layers'] = str(layer_id_by_name[layer['bottom']] - len(cfg_blocks))
+                cfg_blocks.append(a_block)
             #assert(i+1 < layer_num and layers[i+1]['type'] == 'BatchNorm')
             #assert(i+2 < layer_num and layers[i+2]['type'] == 'Scale')
-            conv_layer = layers[i]
-            block = OrderedDict()
+            
             block['type'] = 'convolutional'
-            block['filters'] = conv_layer['convolution_param']['num_output']
-            block['size'] = conv_layer['convolution_param']['kernel_size']
-            block['stride'] = conv_layer['convolution_param'].get('stride', 1)
-            block['pad'] = '1'
-            last_layer = conv_layer 
-            m_conv_layer = lmap[conv_layer['name']] 
+            block['batch_normalize'] = '0'
+            block['filters'] = layer['convolution_param']['num_output']
+            block['size'] = layer['convolution_param']['kernel_size']
+            block['stride'] = layer['convolution_param'].get('stride', 1)
+            block['pad'] = layer['convolution_param'].get('pad', 0)
+            last_layer = layer 
+            weights_conv_layer = layer_weights_by_name[layer_name] 
             if i+2 < layer_num and layers[i+1]['type'] == 'BatchNorm' and layers[i+2]['type'] == 'Scale':
                 print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 print(i+2,layers[i+2]['name'], layers[i+2]['type'])
@@ -72,34 +119,34 @@ def caffe2darknet(protofile, caffemodel):
                 bn_layer = layers[i+1]
                 scale_layer = layers[i+2]
                 last_layer = scale_layer
-                m_scale_layer = lmap[scale_layer['name']]
-                m_bn_layer = lmap[bn_layer['name']]
-                wdata += list(m_scale_layer.blobs[1].data)  ## conv_bias <- sc_beta
-                wdata += list(m_scale_layer.blobs[0].data)  ## bn_scale  <- sc_alpha
-                wdata += (np.array(m_bn_layer.blobs[0].data) / m_bn_layer.blobs[2].data[0]).tolist()  ## bn_mean <- bn_mean/bn_scale
-                wdata += (np.array(m_bn_layer.blobs[1].data) / m_bn_layer.blobs[2].data[0]).tolist()  ## bn_var  <- bn_var/bn_scale
+                weights_scale_layer = layer_weights_by_name[scale_layer['name']]
+                weights_bn_layer = layer_weights_by_name[bn_layer['name']]
+                weights_data += list(weights_scale_layer.blobs[1].data)  ## conv_bias <- sc_beta
+                weights_data += list(weights_scale_layer.blobs[0].data)  ## bn_scale  <- sc_alpha
+                weights_data += (np.array(weights_bn_layer.blobs[0].data) / weights_bn_layer.blobs[2].data[0]).tolist()  ## bn_mean <- bn_mean/bn_scale
+                weights_data += (np.array(weights_bn_layer.blobs[1].data) / weights_bn_layer.blobs[2].data[0]).tolist()  ## bn_var  <- bn_var/bn_scale
                 i = i + 2
             else:
-                wdata += list(m_conv_layer.blobs[1].data)   ## conv_bias
-            wdata += list(m_conv_layer.blobs[0].data)       ## conv_weights
+                weights_data += list(weights_conv_layer.blobs[1].data)   ## conv_bias
+            weights_data += list(weights_conv_layer.blobs[0].data)       ## conv_weights
             
             if i+1 < layer_num and layers[i+1]['type'] == 'ReLU':
                 print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 act_layer = layers[i+1]
                 block['activation'] = 'relu'
                 top = act_layer['top']
-                layer_id[top] = len(blocks)
-                blocks.append(block)
+                layer_id_by_name[top] = len(cfg_blocks)
+                cfg_blocks.append(block)
                 i = i + 1
             else:
                 block['activation'] = 'linear'
                 top = last_layer['top']
-                layer_id[top] = len(blocks)
-                blocks.append(block)
+                layer_id_by_name[top] = len(cfg_blocks)
+                cfg_blocks.append(block)
             i = i + 1
-        elif layer['type'] == 'Pooling':
-            assert(layer_id[layer['bottom']] == len(blocks)-1)
-            block = OrderedDict()
+        elif layer_type == 'Pooling':
+            assert(layer_id_by_name[layer['bottom']] == len(cfg_blocks)-1)
+            
             if layer['pooling_param']['pool'] == 'AVE':
                 block['type'] = 'avgpool'
             elif layer['pooling_param']['pool'] == 'MAX':
@@ -111,80 +158,82 @@ def caffe2darknet(protofile, caffemodel):
                     if pad > 0:
                         block['pad'] = '1'
             top = layer['top']
-            layer_id[top] = len(blocks)
-            blocks.append(block)
+            layer_id_by_name[top] = len(cfg_blocks)
+            cfg_blocks.append(block)
             i = i + 1
-        elif layer['type'] == 'Eltwise':
+        elif layer_type == 'Eltwise':
             bottoms = layer['bottom']
-            bottom1 = layer_id[bottoms[0]] - len(blocks)
-            bottom2 = layer_id[bottoms[1]] - len(blocks)
+            bottom1 = layer_id_by_name[bottoms[0]] - len(cfg_blocks)
+            bottom2 = layer_id_by_name[bottoms[1]] - len(cfg_blocks)
             assert(bottom1 == -1 or bottom2 == -1)
             from_id = bottom2 if bottom1 == -1 else bottom1
-            block = OrderedDict()
+            
             block['type'] = 'shortcut'
             block['from'] = str(from_id)
             assert(i+1 < layer_num and layers[i+1]['type'] == 'ReLU')
             block['activation'] = 'relu'
             top = layers[i+1]['top']
-            layer_id[top] = len(blocks)
-            blocks.append(block)
+            layer_id_by_name[top] = len(cfg_blocks)
+            cfg_blocks.append(block)
             i = i + 2
-        elif layer['type'] == 'InnerProduct':
-            assert(layer_id[layer['bottom']] == len(blocks)-1)
-            block = OrderedDict()
+        elif layer_type == 'InnerProduct':
+            assert(layer_id_by_name[layer['bottom']] == len(cfg_blocks)-1)
+            
             block['type'] = 'connected'
             block['output'] = layer['inner_product_param']['num_output']
-            m_fc_layer = lmap[layer['name']]
-            wdata += list(m_fc_layer.blobs[1].data)       ## fc_bias
-            wdata += list(m_fc_layer.blobs[0].data)       ## fc_weights
+            weights_fc_layer = layer_weights_by_name[layer_name]
+            weights_data += list(weights_fc_layer.blobs[1].data)       ## fc_bias
+            weights_data += list(weights_fc_layer.blobs[0].data)       ## fc_weights
             if i+1 < layer_num and layers[i+1]['type'] == 'ReLU':
                 act_layer = layers[i+1]
                 block['activation'] = 'relu'
                 top = act_layer['top']
-                layer_id[top] = len(blocks)
-                blocks.append(block)
+                layer_id_by_name[top] = len(cfg_blocks)
+                cfg_blocks.append(block)
                 i = i + 2
             else:
                 block['activation'] = 'linear'
                 top = layer['top']
-                layer_id[top] = len(blocks)
-                blocks.append(block)
+                layer_id_by_name[top] = len(cfg_blocks)
+                cfg_blocks.append(block)
                 i = i + 1
-        elif layer['type'] == 'Softmax':
-            assert(layer_id[layer['bottom']] == len(blocks)-1)
-            block = OrderedDict()
+        elif layer_type == 'Softmax':
+            assert(layer_id_by_name[layer['bottom']] == len(cfg_blocks)-1)
+            
             block['type'] = 'softmax'
             block['groups'] = 1
             top = layer['top']
-            layer_id[top] = len(blocks)
-            blocks.append(block)
+            layer_id_by_name[top] = len(cfg_blocks)
+            cfg_blocks.append(block)
             i = i + 1
-        elif layer['type'] == 'Concat':
-            # TODO:
-            block = OrderedDict()
+        elif layer_type == 'Concat':
             block['type'] = 'route'
             top = layer['top']
-            layer_id[top] = len(blocks)
-            # layer_id[top] = len(blocks)
-            blocks.append(block)
+            concat_layers = []
+            for b_name in layer['bottom']:
+                id_str = str(layer_id_by_name[b_name] - len(cfg_blocks))
+                concat_layers.append(id_str)
+            block['layers'] = ','.join(concat_layers)
+            print(block)
+            layer_id_by_name[top] = len(cfg_blocks)
+            cfg_blocks.append(block)
             i = i + 1
         else:
-            print('unknown type %s' % layer['type'])
-            if layer_id[layer['bottom']] != len(blocks)-1:
-                block = OrderedDict()
-                block['type'] = 'route'
-                block['layers'] = str(layer_id[layer['bottom']] - len(blocks))
-                blocks.append(block)
-            block = OrderedDict()
-            block['type'] = layer['type']
+            print('unknown type %s' % layer_type)
+            if layer_id_by_name[layer['bottom']] != len(cfg_blocks)-1:
+                block['type'] = 'WTF'
+                block['layers'] = str(layer_id_by_name[layer['bottom']] - len(cfg_blocks))
+                cfg_blocks.append(block)
+            
+            block['type'] = layer_type
             top = layer['top']
-            layer_id[top] = len(blocks)
-            blocks.append(block)
+            layer_id_by_name[top] = len(cfg_blocks)
+            cfg_blocks.append(block)
 
             i = i + 1
 
     print('done' )
-    return blocks, np.array(wdata)
+    return cfg_blocks, np.array(weights_data)
 
 def save_weights(data, weightfile):
     print('Save to ', weightfile)
@@ -204,19 +253,23 @@ if __name__ == '__main__':
     import sys
     
     if len(sys.argv) != 5:
-        print('try:')
-        print('  python caffe2darknet.py ResNet-50-deploy.prototxt ResNet-50-model.caffemodel ResNet-50-model.cfg ResNet-50-model.weights')
-        exit()
+        sys.argv = [
+            sys.argv[0],
+            '../../jing-pose/pose_deploy_linevec.prototxt',
+            '../../jing-pose/pose_iter_440000.caffemodel',
+            '../../jing-pose/pose_deploy.cfg',
+            '../../jing-pose/pose_deploy.weights',
+        ]
     protofile = sys.argv[1]
     caffemodel = sys.argv[2]
     cfgfile = sys.argv[3]
     weightfile = sys.argv[4]
     
-    blocks, data = caffe2darknet(protofile, caffemodel)
+    cfg_blocks, data = caffe2darknet(protofile, caffemodel)
     
-    save_cfg(blocks, cfgfile)
+    save_cfg(cfg_blocks, cfgfile)
     
     save_weights(data, weightfile)
     
-    print_cfg(blocks)
-    print_cfg_nicely(blocks)
+    print_cfg(cfg_blocks)
+    print_cfg_nicely(cfg_blocks)

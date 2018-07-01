@@ -20,7 +20,7 @@ def parse_cfg(cfgfile):
         line = line.rstrip()
         if line == '' or line[0] == '#':
             line = fp.readline()
-            continue        
+            continue
         elif line[0] == '[':
             if block:
                 blocks.append(block)
@@ -48,20 +48,31 @@ def print_cfg(blocks):
     for block in blocks:
         print('[%s]' % (block['type']))
         for key,value in block.items():
-            if key != 'type':
-                print('%s=%s' % (key, value))
+            if key == 'type':
+                pass
+            elif key == 'name':
+                print('# %s\n' % (block['name']))
+            else:
+                print('%s=%s\n' % (key, value))
         print('')
+
 def save_cfg(blocks, cfgfile):
     with open(cfgfile, 'w') as fp:
+        idx = -1
         for block in blocks:
+            if 'name' in block:
+                # fp.write('# %d: %s\n' % (idx, block['name']))
+                pass
             fp.write('[%s]\n' % (block['type']))
             for key,value in block.items():
-                if key != 'type':
+                if key not in ('type', 'name'):
                     fp.write('%s=%s\n' % (key, value))
             fp.write('\n')
 
+            idx = idx + 1
+
 def print_cfg_nicely(blocks):
-    print('layer     filters    size              input                output');
+    print('layer     filters    size              input                output')
     prev_width = 416
     prev_height = 416
     prev_filters = 3
