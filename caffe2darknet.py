@@ -76,9 +76,9 @@ def caffe2darknet(protofile, caffemodel):
         block['height'] = props['input_dim'][2]
         block['batch'] = props['input_dim'][0]
         block['channels'] = props['input_dim'][1]
-    if int(block['width']) < 10:
+    if int(block['width']) < 100:
         block['width'] = 200
-    if int(block['height']) < 10:
+    if int(block['height']) < 100:
         block['height'] = 200
     if 'mean_file' in props:
         block['mean_file'] = props['mean_file']
@@ -143,7 +143,10 @@ def caffe2darknet(protofile, caffemodel):
             if i + 1 < layer_num and layers[i + 1]['type'] in ('ReLU', 'PReLU'):
                 print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 act_layer = layers[i+1]
-                block['activation'] = 'relu'
+                if layers[i + 1]['type'] == 'ReLU':
+                    block['activation'] = 'relu'
+                else:
+                    block['activation'] = 'relie'
                 top = act_layer['top']
                 layer_id_by_name[top] = len(cfg_blocks)
                 cfg_blocks.append(block)
