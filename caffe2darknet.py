@@ -15,6 +15,14 @@ def caffe2darknet(protofile, caffemodel):
     props = net_info['props']
     org_layers = net_info['layers']
 
+    layer_activation_by_name = {}
+    for layer in org_layers:
+        layer_name = layer['name']
+        layer_type = layer['type']
+        bottom_name = layer['bottom']
+        if layer_type in ('ReLU', 'PReLU'):
+            layer_activation_by_name[bottom_name] = layer_name
+
     org_layer_id_by_name = OrderedDict()
     graph = {}
     for i in range(len(org_layers)):
@@ -26,11 +34,13 @@ def caffe2darknet(protofile, caffemodel):
         if not isinstance(bottom_name, list):
             bottom_name = [bottom_name]
         for b_name in bottom_name:
-            if layer_type in ('Convolution', 'Pooling'):
-                b_name = b_name.replace('conv', 'relu')
-            bottom = graph.get(b_name, [])
-            bottom.append(layer_name)
-            graph[b_name] = bottom
+            if layer_type in ('Pooling', 'Convolution', 'Concat'):
+                # change b_name
+                if b_name in layer_activation_by_name:
+                    b_name = layer_activation_by_name[b_name]
+            top_layers = graph.get(b_name, [])
+            top_layers.append(layer_name)
+            graph[b_name] = top_layers
     if 'image' in graph:
         del graph['image']
     sorted_layer_names = topological_sort.topological_sort(graph)
@@ -130,7 +140,7 @@ def caffe2darknet(protofile, caffemodel):
                 weights_data += list(weights_conv_layer.blobs[1].data)   ## conv_bias
             weights_data += list(weights_conv_layer.blobs[0].data)       ## conv_weights
             
-            if i+1 < layer_num and layers[i+1]['type'] == 'ReLU':
+            if i + 1 < layer_num and layers[i + 1]['type'] in ('ReLU', 'PReLU'):
                 print(i+1,layers[i+1]['name'], layers[i+1]['type'])
                 act_layer = layers[i+1]
                 block['activation'] = 'relu'
@@ -214,7 +224,7 @@ def caffe2darknet(protofile, caffemodel):
                 id_str = str(layer_id_by_name[b_name] - len(cfg_blocks))
                 concat_layers.append(id_str)
             block['layers'] = ','.join(concat_layers)
-            print(block)
+            # print(block)
             layer_id_by_name[top] = len(cfg_blocks)
             cfg_blocks.append(block)
             i = i + 1
@@ -255,8 +265,8 @@ if __name__ == '__main__':
     if len(sys.argv) != 5:
         sys.argv = [
             sys.argv[0],
-            '../../jing-pose/pose_deploy_linevec.prototxt',
-            '../../jing-pose/pose_iter_440000.caffemodel',
+            'd:/__svn_pool/openpose/models/pose/body_25/pose_deploy.prototxt',
+            'd:/__svn_pool/openpose/models/pose/body_25/pose_iter_584000.caffemodel',
             '../../jing-pose/pose_deploy.cfg',
             '../../jing-pose/pose_deploy.weights',
         ]
@@ -271,5 +281,5 @@ if __name__ == '__main__':
     
     save_weights(data, weightfile)
     
-    print_cfg(cfg_blocks)
-    print_cfg_nicely(cfg_blocks)
+    # print_cfg(cfg_blocks)
+    # print_cfg_nicely(cfg_blocks)

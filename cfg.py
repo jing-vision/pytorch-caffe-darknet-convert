@@ -61,7 +61,7 @@ def save_cfg(blocks, cfgfile):
         idx = -1
         for block in blocks:
             if 'name' in block:
-                # fp.write('# %d: %s\n' % (idx, block['name']))
+                fp.write('# %d: %s\n' % (idx, block['name']))
                 pass
             fp.write('[%s]\n' % (block['type']))
             for key,value in block.items():
